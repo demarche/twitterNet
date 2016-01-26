@@ -53,18 +53,16 @@ class GoogLeNetBN(chainer.FunctionSet):
         res = math.log(a, self.const)
         return res
 
-    def toLogCPU(self, t):
-        t.data = np.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
-                                   dtype=np.float32).reshape(t.data.shape)
-        return t
-
-    def toLog(self, t):
-        t.data = cuda.cupy.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
+    def toLog(self, t, xp):
+        t.data = xp.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
                                    dtype=cuda.cupy.float32).reshape(t.data._shape)
         return t
 
+    def train(self, x_img, x_doc, y_data, regression):
+        return self.forward( x_img, x_doc, y_data, regression=regression)
+        self.loss = 0.3 * (self.loss1 + self.loss2) + self.loss3
 
-    def forward(self, x_img, x_doc, y_data, train=True, regression=False, predict=False, gpu=True):
+    def forward(self, x_img, x_doc, y_data, train=True, regression=False, gpu=True):
         test = not train
 
         xp = cuda.cupy if gpu else np
@@ -74,9 +72,8 @@ class GoogLeNetBN(chainer.FunctionSet):
 
         img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
 
-        if regression and not predict:
-            t = self.toLog(t)
-            #t.data = cuda.cupy.asarray(t.data,  dtype=cuda.cupy.float32).reshape((20,1))
+        if regression and train:
+            t = self.toLog(t, xp)
 
         h = F.max_pooling_2d(
             F.relu(self.norm1(self.conv1(img), test=test)),  3, stride=2, pad=1)
@@ -88,7 +85,7 @@ class GoogLeNetBN(chainer.FunctionSet):
         h = self.inc3c(h)
         h = self.inc4a(h)
 
-        if not predict:
+        if train:
             a = F.average_pooling_2d(h, 5, stride=3)
             a = F.relu(self.norma(self.conva(a), test=test))
             a = F.relu(self.norma2(self.lina(a), test=test))
@@ -103,7 +100,7 @@ class GoogLeNetBN(chainer.FunctionSet):
         h = self.inc4c(h)
         h = self.inc4d(h)
 
-        if not predict:
+        if train:
             b = F.average_pooling_2d(h, 5, stride=3)
             b = F.relu(self.normb(self.convb(b), test=test))
             b = F.relu(self.normb2(self.linb(b), test=test))
@@ -125,7 +122,7 @@ class GoogLeNetBN(chainer.FunctionSet):
 
         h = self.out(b)
 
-        if predict:
+        if not train:
             #t.data = cuda.cupy.asarray(t.data,  dtype=cuda.cupy.float32).reshape((20,1))
             #myloss = F.mean_squared_error(h, t)
             return h

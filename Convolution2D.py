@@ -83,7 +83,7 @@ if __name__ == "__main2__":
         x_batch = get_images(perm[i:i + batchsize])
         x_batch_doc = doc_vectors[perm[i:i + batchsize]]
         y_batch = labels[perm[i:i + batchsize]]
-        res = model.forward(x_batch, x_batch_doc, y_batch, train=False, regression=True, predict=True, gpu=gpu)
+        res = model.forward(x_batch, x_batch_doc, y_batch, train=False, regression=True, gpu=gpu)
         res = cuda.to_cpu(res.data)
         res = [[model.fixedLog(x[0]+model.const), model.fixedLog(y+model.const)] for x, y in zip(list(res), y_batch)]
         with open('some.csv', 'a') as f:
