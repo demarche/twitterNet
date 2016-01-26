@@ -1,10 +1,7 @@
-from chainer import Link, Chain, ChainList, computational_graph, cuda, optimizers, serializers, FunctionSet, Variable
-from RetweetNet_Org import RetweetNet
-from GoogleNet import GoogLeNet
-from GoogleNetBN import GoogLeNetBN
+from chainer import Link, Chain, ChainList, computational_graph, cuda, FunctionSet, Variable
+from GoogleNetBN import twitterNet_worker
 
 import pickle
-from sklearn import preprocessing, cross_validation
 import six, sys
 import numpy as np
 import csv
@@ -13,23 +10,25 @@ from PIL import Image
 from progressbar import ProgressBar
 import pickle
 import os.path
+import argparse
 from extract_feature import saver
 
 in_size = 256
 
+def get_images(perm, path):
 
-def get_images(perm):
-
-    mean_image = pickle.load(open("image_mean.pkl", "rb"))
+    mean_image = pickle.load(open(os.path.join(path, "image_mean.pkl"), "rb"))
+    images_path = os.path.join(path, "images")
     img_list=[]
     for img_name in perm:
-        img = pickle.load(open("/media/yamashita004/4dad8012-5855-4d11-8128-8fc5247ba677/NeuralNet/images/"+str(img_name)+".pkl", "rb"))
+        img = pickle.load(open(os.path.join(images_path, str(img_name)+".pkl"), "rb"))
         img -= mean_image
         img_list.append(img)
     return np.array(img_list, dtype=np.float32)
 
-def build_imagesets():
-    my_saver = saver(r'/media/yamashita004/HDPX-UT/moved', in_size)
+def build_imagesets(path):
+    # path is ~moved/~
+    my_saver = saver(path, in_size)
     my_saver.save()
 
 def reduce_label(labels, k, split_perm):
@@ -49,33 +48,25 @@ def reduce_label(labels, k, split_perm):
     p.finish()
     return split_perm
 
-if __name__ == '__main2__':
-    build_imagesets()
-
-if __name__ == "__main2__":
-    if len(sys.argv)>1:
-        gpu = sys.argv[1]=="1"
-    else:
-        gpu=False
-    if gpu:cuda.check_cuda_available()
+def output_test(path, gpu_id, saved_path, regression):
+    gpu = gpu_id >= 0
+    dir = os.path.dirname(saved_path)
+    if gpu:
+        cuda.check_cuda_available()
     print("make NN model..")
-
-    optimizer = optimizers.Adam()
-    model = GoogLeNetBN(1)
+    worker = twitterNet_worker(1)
 
     print("loading NN model..")
-    serializers.load_hdf5(r'40mlp.model', model)
+    worker.load(saved_path)
     if gpu:
-        cuda.get_device(0).use()
-        model.to_gpu()
+        cuda.get_device(gpu_id).use()
+        worker.model.to_gpu()
 
-    #my_saver = saver(r'/media/yamashita004/HDPX-UT/moved', in_size)
+    labels = np.array(pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb")), dtype=np.int32)
+    doc_vectors = np.array(pickle.load((open(os.path.join(path, "corpus_features.pkl"), "rb"))), dtype=np.float32)
 
-    labels = np.array(pickle.load(open('answers_RT.pkl', "rb")), dtype=np.int32)
-    doc_vectors = np.array(pickle.load((open("corpus_features.pkl", "rb"))), dtype=np.float32)
-
-    perm = pickle.load(open('test_perm.pkl', "rb"))
-    batchsize = 20
+    perm = pickle.load(open(os.path.join(dir, 'test_perm.pkl'), "rb"))
+    batchsize = 30
 
     p = ProgressBar(max_value=len(perm), min_value=1)
     for i in six.moves.range(0, len(perm), batchsize):
@@ -83,77 +74,62 @@ if __name__ == "__main2__":
         x_batch = get_images(perm[i:i + batchsize])
         x_batch_doc = doc_vectors[perm[i:i + batchsize]]
         y_batch = labels[perm[i:i + batchsize]]
-        res = model.forward(x_batch, x_batch_doc, y_batch, train=False, regression=True, gpu=gpu)
+        res = worker.predict(x_batch, x_batch_doc, gpu=gpu)
         res = cuda.to_cpu(res.data)
-        res = [[model.fixedLog(x[0]+model.const), model.fixedLog(y+model.const)] for x, y in zip(list(res), y_batch)]
+        res = [[worker.fixedLog(x[0]+worker.const), worker.fixedLog(y+worker.const)] for x, y in zip(list(res), y_batch)]
         with open('some.csv', 'a') as f:
             writer = csv.writer(f, lineterminator='\n')
             writer.writerows(res)
     p.finish()
 
-if __name__ == '__main__':
-    train_test_rate = 0.2
-    batchsize = 30
-    n_epoch = 1000
-    regression = False
-
-    print("loading data")
-    if regression:
-        labels = pickle.load(open(
-                '/media/yamashita004/4dad8012-5855-4d11-8128-8fc5247ba677/NeuralNet/answers_RT.pkl', "rb"))
-    else:
-        labels = pickle.load(open("answers.pkl", "rb"))
-    labels = list(map(int, labels))
-    lbmax = max(labels)+1
-    doc_vectors = pickle.load((open("corpus_features.pkl", "rb")))
+def create_split_perm(regression, labels, path):
+    label_max = max(labels) + 1
     db_len = len(labels)
     split_perm = np.random.permutation(db_len)
-
-    print("normalarize")
     if not regression:
         # 均衡化
-        lbl_cnt = [labels.count(x) for x in range(lbmax)]
+        lbl_cnt = [labels.count(x) for x in range(label_max)]
         print(lbl_cnt)
         k = min(lbl_cnt)
         print(k)
-
         split_perm = reduce_label(labels, k, split_perm)
-
-        labels = np.array(labels, dtype=np.int32)
+        # check
+        lbl_check=[]
+        for i in range(label_max):
+            lbl_check.append(list(labels[split_perm]).count(i))
+        print(lbl_check)
     else:
-        if os.path.exists("lbl_cnt.pkl"):
+        if os.path.exists(os.path.join(path, "lbl_cnt.pkl")):
             print("load lbl_cnt")
-            lbl_cnt = pickle.load(open("lbl_cnt.pkl", "rb"))
+            lbl_cnt = pickle.load(open(os.path.join(path, "lbl_cnt.pkl"), "rb"))
         else:
             print("create lbl_cnt")
             lbl_cnt = []
-            p = ProgressBar(max_value=lbmax, min_value=1)
-            for i, x in enumerate(range(lbmax)):
+            p = ProgressBar(max_value=label_max, min_value=1)
+            for i, x in enumerate(range(label_max)):
                 p.update(i+1)
                 lbl_cnt.append(labels.count(x))
             p.finish()
-            pickle.dump(lbl_cnt, open("lbl_cnt.pkl", "wb"))
+            pickle.dump(lbl_cnt, open(os.path.join(path, "lbl_cnt.pkl"), "wb"))
 
         print("create mean")
         #lbl_cnt_mean = np.mean(list(filter(lambda t:t>10, lbl_cnt)))
         lbl_cnt_mean=500
         print(lbl_cnt)
         print(lbl_cnt_mean)
-
         # reduce
         split_perm = reduce_label(labels, lbl_cnt_mean, split_perm)
         labels2 = [labels[x] for x in split_perm]
-        lbl_cnt = [labels2.count(x) for x in range(lbmax)]
+        lbl_cnt = [labels2.count(x) for x in range(label_max)]
         print(lbl_cnt)
-
         # remove sparse element
         remove_list = []
         for i, x in list(enumerate(lbl_cnt))[::-1]:
             if x != 1 and x != 0:
                 break
-            elif i+1 == lbmax or x == 1:
+            elif i+1 == label_max or x == 1:
                 remove_list.append(i)
-            elif x == 1 and (lbl_cnt[i+1] !=0 or lbl_cnt[i-1] != 0):
+            elif x == 1 and (lbl_cnt[i+1] != 0 or lbl_cnt[i-1] != 0):
                 break
         split_perm = list(split_perm)
         for x in remove_list:
@@ -162,142 +138,156 @@ if __name__ == '__main__':
         split_perm = np.array(split_perm)
 
         labels2 = [labels[x] for x in split_perm]
-        lbmax = max(labels2)+1
-        lbl_cnt = [labels2.count(x) for x in range(lbmax)]
+        label_max = max(labels2) + 1
+        lbl_cnt = [labels2.count(x) for x in range(label_max)]
         print(lbl_cnt)
         print(len(split_perm))
+    return split_perm
 
-        labels = np.array(labels, dtype=np.float32)
-        labels = labels.astype(np.float32).reshape(len(labels), 1)
+def train_and_test(path, gpu_id, saved_path, regression):
+    train_test_rate = 0.2
+    batchsize = 10
+    n_epoch = 1000
+    gpu = gpu_id >= 0
 
+    print("loading data")
+    if regression:
+        labels = pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb"))
+    else:
+        labels = pickle.load(open(os.path.join(path, "answers.pkl"), "rb"))
+    doc_vectors = pickle.load((open(os.path.join(path, "corpus_features.pkl"), "rb")))
     doc_vectors = np.array(doc_vectors, dtype=np.float32)
 
-    if not regression:
-        # check
-        lbl_check=[]
-        for i in range(lbmax):
-            lbl_check.append(list(labels[split_perm]).count(i))
-        print(lbl_check)
+    labels = list(map(int, labels))
+    label_max = max(labels) + 1
 
     # split train test data
-    db_len=len(split_perm)
-    N_test = int(train_test_rate*db_len)
-    N = int(db_len-N_test)
-    train_perm = split_perm[:N]
-    test_perm = split_perm[N:]
-    print("train:", len(train_perm))
-    print("test:", len(test_perm))
-    pickle.dump(train_perm, open("train_perm.pkl", "wb"))
-    pickle.dump(test_perm, open("test_perm.pkl", "wb"))
+    if saved_path == "":
+        dir = os.path.abspath(os.path.dirname(__file__))
+    else:
+        dir = os.path.dirname(saved_path)
+    if dir != "" and os.path.exists(os.path.join(dir, "train_perm.pkl")) and os.path.exists(os.path.join(dir, "test_perm.pkl")):
+        train_perm = pickle.load(open(os.path.join(dir, "train_perm.pkl"), "rb"))
+        test_perm = pickle.load(open(os.path.join(dir, "test_perm.pkl"), "rb"))
+        N = len(train_perm)
+        N_test = len(test_perm)
+    else:
+        print("normalarize")
+        split_perm = create_split_perm(regression, labels, path)
+        db_len=len(split_perm)
+        N_test = int(train_test_rate*db_len)
+        N = int(db_len-N_test)
+        train_perm = split_perm[:N]
+        test_perm = split_perm[N:]
+        print("train:", len(train_perm))
+        print("test:", len(test_perm))
+        if dir == "":
+            dir = os.path.abspath(os.path.dirname(__file__))
+        pickle.dump(train_perm, open(os.path.join(dir, "train_perm.pkl"), "wb"))
+        pickle.dump(test_perm, open(os.path.join(dir, "test_perm.pkl"), "wb"))
+
+    if regression:
+        labels = np.array(labels, dtype=np.float32).reshape(len(labels), 1)
+    else:
+        labels = np.array(labels, dtype=np.int32)
 
     # make model
     print("make model")
-    #model = RetweetNet(max(labels)+1)
     if regression:
-        model = GoogLeNetBN(1)
+        worker = twitterNet_worker(1)
     else:
-        model = GoogLeNetBN(lbmax)
-    cuda.get_device(0).use()
-    model.to_gpu()
-
-    optimizer = optimizers.Adam()
-    optimizer.setup(model)
-    loss_move=[]
-    acc_move=[]
-    test_move=[]
+        worker = twitterNet_worker(label_max)
+    if saved_path != "" and os.path.exists(saved_path):
+        worker.load(saved_path)
+    if gpu:
+        cuda.get_device(0).use()
+        worker.model.to_gpu()
+    train_losses = []
+    train_scores = []
+    test_move = []
 
     for epoch in six.moves.range(1, n_epoch + 1):
         print('epoch', epoch)
-
-        # random select optimizer
-        rnd = np.random.randint(0, 3)
-        if rnd == 0:
-            print('opt:Adam')
-            optimizer = optimizers.Adam()
-        elif rnd == 1:
-            print('opt:AdaGrad')
-            optimizer = optimizers.AdaGrad()
-        else:
-            print('opt:AdaDelta')
-            optimizer = optimizers.AdaDelta()
-        optimizer.setup(model)
-
         # training
         perm = np.random.permutation(N)
-        sum_accuracy = 0
         sum_loss = 0
-        sum_corr = 0
+        sum_predict = 0
         p = ProgressBar(max_value=N, min_value=1)
         for i in six.moves.range(0, N, batchsize):
             p.update(i+1)
-            x_batch = get_images(train_perm[perm[i:i + batchsize]])
+            x_batch = get_images(train_perm[perm[i:i + batchsize]], path)
             x_batch_doc = doc_vectors[train_perm[perm[i:i + batchsize]]]
             y_batch = labels[train_perm[perm[i:i + batchsize]]]
-
             # Pass the loss function (Classifier defines it) and its arguments
-            optimizer.zero_grads()
-            if regression:
-                loss, corr = model.forward(x_batch, x_batch_doc, y_batch, regression=regression)
-            else:
-                loss = model.forward(x_batch, x_batch_doc, y_batch, regression=regression)
-            loss.backward()
-            optimizer.update()
-            sum_loss += float(loss.data) * len(y_batch)
-            if regression:
-                sum_corr += corr[0, 1] * len(y_batch)
+            loss, predict = worker.train(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu)
+            sum_loss += float(loss) * len(y_batch)
+            sum_predict += float(predict) * len(y_batch)
         p.finish()
         print("train mean loss: %f" % (sum_loss / N))
-        loss_move.append(sum_loss / N)
-        pickle.dump(loss_move, open("loss.pkl", "wb"))
-        if regression:
-            print("train mean corr: %f" % (sum_corr / N))
-            acc_move.append(sum_corr / N)
-            pickle.dump(acc_move, open("corr.pkl", "wb"))
-
-
-        # テストデータを用いて精度を評価する
-        if epoch%5 == 0 and epoch != 0:
-            sum_accuracy = [0.0]*lbmax
-            total_acc_elem = [0]*lbmax
-            sum_loss = 0.0
+        print("train mean corr: %f" % (sum_predict / N))
+        train_losses.append(sum_loss / N)
+        train_scores.append(sum_predict / N)
+        pickle.dump(train_losses, open("train_losses.pkl", "wb"))
+        pickle.dump(train_scores, open("train_scores.pkl", "wb"))
+        # test
+        if epoch % 5 == 0 and epoch != 0:
+            sum_accuracy = [0.0] * label_max
+            total_acc_elem = [0] * label_max
             sum_corr = 0
             p = ProgressBar(max_value=N_test, min_value=1)
             for i in range(0, N_test, batchsize):
                 p.update(i+1)
-                x_batch = get_images(test_perm[i:i + batchsize])
+                x_batch = get_images(test_perm[i:i + batchsize], path)
                 x_batch_doc = doc_vectors[test_perm[i:i + batchsize]]
                 y_batch = labels[test_perm[i:i + batchsize]]
 
                 if regression:
-                    loss, corr = model.forward(x_batch, x_batch_doc, y_batch,
-                                                   train=False, regression=regression)
-                    sum_corr += corr[0, 1] * len(y_batch)
+                    corr = worker.test(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu)
+                    sum_corr += corr * len(y_batch)
                 else:
-                    acc = [0.0]*lbmax
-                    for i in range(lbmax):
-                        mynumlist = [x for x in np.arange(len(y_batch)) if y_batch[x] == i]
-                        if len(mynumlist)==0:
-                            acc[i]=0.0
-                        else:
-                            acc[i] = model.forward(x_batch[mynumlist], x_batch_doc[mynumlist], y_batch[mynumlist],
-                                                   train=False, regression=regression).data*len(mynumlist)
-                        total_acc_elem[i] += len(mynumlist)
+                    # ラベルごとの精度を出す
+                    acc = [0.0] * label_max
+                    for label in range(label_max):
+                        labeled_perm = [x for x in np.arange(len(y_batch)) if y_batch[x] == label]
+                        if len(labeled_perm) != 0:
+                            acc = worker.test(x_batch[labeled_perm], x_batch_doc[labeled_perm], y_batch[labeled_perm],
+                                             regression=regression, gpu=gpu)*len(labeled_perm)
+                        total_acc_elem[label] += len(labeled_perm)
                     sum_accuracy = [s+float(t) for s, t in zip(sum_accuracy, acc)]
             p.finish()
             if regression:
                 print("test mean corr: %f" % (sum_corr / N_test))
                 test_move.append(sum_corr / N_test)
-                pickle.dump(test_move, open("test_corr.pkl", "wb"))
+                pickle.dump(test_move, open("test_score.pkl", "wb"))
             else:
                 sum_accuracy = [t / float(u) for t, u in zip(sum_accuracy, total_acc_elem)]
-                acc_move.append(np.mean(sum_accuracy))
-                pickle.dump(acc_move, open("acc.pkl", "wb"))
                 print("\n".join(map(str, sum_accuracy)))
                 print("mean:", np.mean(sum_accuracy))
+                test_move.append(np.mean(sum_accuracy))
+                pickle.dump(test_move, open("test_score.pkl", "wb"))
 
         if epoch % 5 == 0 and epoch != 0:
             # Save the model and the optimizer
             print('save the model')
-            serializers.save_hdf5(str(epoch)+'mlp.model', model)
-            print('save the optimizer')
-            serializers.save_hdf5(str(epoch)+'mlp.state', optimizer)
+            worker.save(epoch, dir)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Process about tweetNet')
+    parser.add_argument('-k', "--kind", dest='kind', default=0, type=int,
+                        help='kind of process. 0: train and test. 1: test and output. 2: build image sets.  (default: 0)')
+    parser.add_argument('-p', "--path", dest='path', default=os.path.abspath(os.path.dirname(__file__))+"\\data", type=str,
+                        help='working path.  (default: my dir)')
+    parser.add_argument('-s', "--saved_path", dest='saved_path', default="", type=str,
+                        help='saved model path.  (default: empty)')
+    parser.add_argument('-g', "--gpu", dest='gpu_id', default=0,
+                        help='using gpu id.  (default: 0)')
+    parser.add_argument('-r', "--reg", dest='regression', type=bool, default=True,
+                        help='using regression predict.  (default: True)')
+
+    args = parser.parse_args()
+    if args.kind == 0:
+        train_and_test(args.path, args.gpu_id, args.saved_path, args.regression)
+    elif args.kind == 1:
+        output_test(args.path, args.gpu_id, args.saved_path, args.regression)
+    else:
+        build_imagesets(args.path)
+

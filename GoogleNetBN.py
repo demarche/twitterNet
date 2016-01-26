@@ -1,16 +1,109 @@
 import chainer
 import chainer.functions as F
 import chainer.links as L
-from chainer import cuda, Variable
+from chainer import cuda, Variable, optimizers, serializers
 import math
 import numpy as np
+import os.path
+
+class twitterNet_worker():
+
+    const = 10.0
+
+    def __init__(self, outputdim, optimizer=None):
+        if optimizer is None:
+            self.optimizer = chainer.optimizers.Adam()
+        else:
+            self.optimizer = optimizer
+        self.model = GoogLeNetBN(outputdim)
+        self.optimizer.setup(self.model)
+        self.myOptimizers = [optimizers.Adam(), optimizers.AdaGrad(), optimizers.AdaDelta()]
+
+    def save(self, path, epoch):
+        serializers.save_hdf5(os.path.join(path, str(epoch)+'mlp.model'), self.model)
+        serializers.save_hdf5(os.path.join(path, str(epoch)+'mlp.state'), self.optimizer)
+
+    def load(self, path):
+        serializers.load_hdf5(path, self.model)
+
+    def fixedLog(self, a):
+        if a <= 0:
+            a = self.const
+        res = math.log(a, self.const)
+        return res
+
+    def toLog(self, t, xp):
+        t.data = xp.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
+                            dtype=cuda.cupy.float32).reshape(t.data._shape)
+        return t
+
+    def predict(self, x_img, x_doc, gpu=True):
+        xp = cuda.cupy if gpu else np
+        x_img = xp.asarray(x_img)
+        x_doc = xp.asarray(x_doc)
+        img, doc = Variable(x_img), Variable(x_doc)
+        return self.model.forward(img, doc, train=False, regression=regression)
+
+    def test(self, x_img, x_doc, y_data, regression, gpu=True):
+        xp = cuda.cupy if gpu else np
+        x_img = xp.asarray(x_img)
+        x_doc = xp.asarray(x_doc)
+        y_data = xp.asarray(y_data)
+        img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
+        y = self.model.forward(img, doc, train=False, regression=regression)
+        if regression:
+            h = self.toLog(y, xp)
+            t = self.toLog(t, xp)
+            h = np.array(cuda.to_cpu(h.data)).reshape((len(h)))
+            t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
+            return np.corrcoef(h, t)[0, 1]
+        else:
+            return F.accuracy(h, t)
+
+    def train(self, x_img, x_doc, y_data, regression, gpu=True):
+        xp = cuda.cupy if gpu else np
+        x_img = xp.asarray(x_img)
+        x_doc = xp.asarray(x_doc)
+        y_data = xp.asarray(y_data)
+        img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
+        y = self.model.forward(img, doc, regression=regression)
+
+        # calc loss
+        if regression:
+            a = self.toLog(y["a"], xp)
+            b = self.toLog(y["b"], xp)
+            h = self.toLog(y["h"], xp)
+            t = self.toLog(t, xp)
+            self.loss1 = F.mean_squared_error(a, t)
+            self.loss2 = F.mean_squared_error(b, t)
+            self.loss3 = F.mean_squared_error(h, t)
+        else:
+            a = y["a"]
+            b = y["b"]
+            h = y["h"]
+            self.loss1 = F.softmax_cross_entropy(a, t)
+            self.loss2 = F.softmax_cross_entropy(b, t)
+            self.loss3 = F.softmax_cross_entropy(h, t)
+        loss = 0.3 * (self.loss1 + self.loss2) + self.loss3
+
+        # random select optimizer
+        rnd = np.random.randint(0, len(self.myOptimizers))
+        self.optimizer = self.myOptimizers[rnd]
+        self.optimizer.setup(self.model)
+        self.optimizer.zero_grads()
+        loss.backward()
+        self.optimizer.update()
+
+        if regression:
+            h = np.array(cuda.to_cpu(h.data)).reshape((len(h)))
+            t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
+            return loss.data, np.corrcoef(h, t)[0, 1]
+        else:
+            return loss.data,  F.accuracy(h, t)
 
 class GoogLeNetBN(chainer.FunctionSet):
 
     """New GoogLeNet of BatchNormalization version."""
-
-    insize = 224
-    const = 10.0
 
     def __init__(self, n_outputs):
         super(GoogLeNetBN, self).__init__(
@@ -47,33 +140,9 @@ class GoogLeNetBN(chainer.FunctionSet):
             normb2=L.BatchNormalization(1024),
             outb=L.Linear(1024, n_outputs)
         )
-    def fixedLog(self, a):
-        if a<=0:
-            a=self.const
-        res = math.log(a, self.const)
-        return res
 
-    def toLog(self, t, xp):
-        t.data = xp.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
-                                   dtype=cuda.cupy.float32).reshape(t.data._shape)
-        return t
-
-    def train(self, x_img, x_doc, y_data, regression):
-        return self.forward( x_img, x_doc, y_data, regression=regression)
-        self.loss = 0.3 * (self.loss1 + self.loss2) + self.loss3
-
-    def forward(self, x_img, x_doc, y_data, train=True, regression=False, gpu=True):
+    def forward(self, img, doc, train=True, regression=False):
         test = not train
-
-        xp = cuda.cupy if gpu else np
-        x_img = xp.asarray(x_img)
-        x_doc = xp.asarray(x_doc)
-        y_data = xp.asarray(y_data)
-
-        img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
-
-        if regression and train:
-            t = self.toLog(t, xp)
 
         h = F.max_pooling_2d(
             F.relu(self.norm1(self.conv1(img), test=test)),  3, stride=2, pad=1)
@@ -90,11 +159,6 @@ class GoogLeNetBN(chainer.FunctionSet):
             a = F.relu(self.norma(self.conva(a), test=test))
             a = F.relu(self.norma2(self.lina(a), test=test))
             a = self.outa(a)
-            if regression:
-                #a = self.toLog(a)
-                self.loss1 = F.mean_squared_error(a, t)
-            else:
-                self.loss1 = F.softmax_cross_entropy(a, t)
 
         h = self.inc4b(h)
         h = self.inc4c(h)
@@ -105,11 +169,6 @@ class GoogLeNetBN(chainer.FunctionSet):
             b = F.relu(self.normb(self.convb(b), test=test))
             b = F.relu(self.normb2(self.linb(b), test=test))
             b = self.outb(b)
-            if regression:
-                #b = self.toLog(b)
-                self.loss2 = F.mean_squared_error(b, t)
-            else:
-                self.loss2 = F.softmax_cross_entropy(b, t)
 
         h = self.inc4e(h)
         h = self.inc5a(h)
@@ -118,26 +177,15 @@ class GoogLeNetBN(chainer.FunctionSet):
 
         h2 = F.relu(self.doc_fc1(F.dropout(doc, train=train)))
         h2 = F.relu(self.doc_fc2(h2))
-        b = F.relu(self.bi1(h, h2))
+        bi = F.relu(self.bi1(h, h2))
 
-        h = self.out(b)
-
-        if not train:
-            #t.data = cuda.cupy.asarray(t.data,  dtype=cuda.cupy.float32).reshape((20,1))
-            #myloss = F.mean_squared_error(h, t)
-            return h
-        if regression:
-            h = self.toLog(h)
-            self.loss3 = F.mean_squared_error(h, t)
-        else:
-            self.loss3 = F.softmax_cross_entropy(h, t)
+        h = self.out(bi)
 
         if train:
-            if regression:
-                h = np.array(cuda.to_cpu(h.data)).reshape((len(h)))
-                t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
-                return 0.3 * (self.loss1 + self.loss2) + self.loss3, np.corrcoef(h, t)
-            else:
-                return 0.3 * (self.loss1 + self.loss2) + self.loss3
+            return {
+                "a": a,
+                "b": b,
+                "h": h
+            }
         else:
-            return F.accuracy(h, t)
+            return h
