@@ -3,7 +3,7 @@ import chainer.functions as F
 import chainer.links as L
 
 in_size = 256
-path = r"C:\Users\大悟\Desktop\moved\moved\images"
+path = r"C:\Users\xx\Desktop\moved\moved\images"
 
 class RetweetNet(FunctionSet):
     def __init__(self, n_outputs):
