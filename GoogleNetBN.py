@@ -24,7 +24,9 @@ class twitterNet_worker():
         serializers.save_hdf5(os.path.join(path, str(epoch)+'mlp.state'), self.optimizer)
 
     def load(self, path):
+        name, _ = os.path.splitext(os.path.basename(path))
         serializers.load_hdf5(path, self.model)
+        return int(name[:-3])
 
     def fixedLog(self, a):
         if a <= 0:

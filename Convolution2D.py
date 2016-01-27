@@ -198,7 +198,9 @@ def train_and_test(path, gpu_id, saved_path, regression):
     else:
         worker = twitterNet_worker(label_max)
     if saved_path != "" and os.path.exists(saved_path):
-        worker.load(saved_path)
+        loaded_epoch = worker.load(saved_path)
+    else:
+        loaded_epoch = 1
     if gpu:
         cuda.get_device(0).use()
         worker.model.to_gpu()
@@ -206,7 +208,7 @@ def train_and_test(path, gpu_id, saved_path, regression):
     train_scores = []
     test_move = []
 
-    for epoch in six.moves.range(1, n_epoch + 1):
+    for epoch in six.moves.range(loaded_epoch, n_epoch + 1):
         print('epoch', epoch)
         # training
         perm = np.random.permutation(N)
