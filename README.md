@@ -12,7 +12,7 @@ Tweet crawler with image
 あとで
 
 ### Step2. 画像付きツイートを学習用形式に変更
-`python Convolution2d.py -k 2 -p <user_info.txtが保存されている場所>`
+`python Convolution2d.py -k 2 -p <user_info.txtが保存されている場所>`  
 画像やRT数が保存される
 
 ## 学習
