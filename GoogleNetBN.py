@@ -39,7 +39,7 @@ class twitterNet_worker():
                             dtype=cuda.cupy.float32).reshape(t.data._shape)
         return t
 
-    def predict(self, x_img, x_doc, gpu=True):
+    def predict(self, x_img, x_doc, regression, gpu=True):
         xp = cuda.cupy if gpu else np
         x_img = xp.asarray(x_img)
         x_doc = xp.asarray(x_doc)
@@ -60,7 +60,7 @@ class twitterNet_worker():
             t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
             return np.corrcoef(h, t)[0, 1]
         else:
-            return F.accuracy(h, t)
+            return F.accuracy(y, t)
 
     def train(self, x_img, x_doc, y_data, regression, gpu=True):
         xp = cuda.cupy if gpu else np

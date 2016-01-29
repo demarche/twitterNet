@@ -74,7 +74,7 @@ def output_test(path, gpu_id, saved_path, regression):
         x_batch = get_images(perm[i:i + batchsize])
         x_batch_doc = doc_vectors[perm[i:i + batchsize]]
         y_batch = labels[perm[i:i + batchsize]]
-        res = worker.predict(x_batch, x_batch_doc, gpu=gpu)
+        res = worker.predict(x_batch, x_batch_doc, regression, gpu=gpu)
         res = cuda.to_cpu(res.data)
         res = [[worker.fixedLog(x[0]+worker.const), worker.fixedLog(y+worker.const)] for x, y in zip(list(res), y_batch)]
         with open('some.csv', 'a') as f:
