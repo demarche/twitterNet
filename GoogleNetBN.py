@@ -123,12 +123,10 @@ class GoogLeNetBN(chainer.FunctionSet):
             inc4e=L.InceptionBN(576, 0, 128, 192, 192, 256, 'max', stride=2),
             inc5a=L.InceptionBN(1024, 352, 192, 320, 160, 224, 'avg', 128),
             inc5b=L.InceptionBN(1024, 352, 192, 320, 192, 224, 'max', 128),
-            linz=L.Linear(1024, 300),
-            out=L.Linear(300, n_outputs),
+            linz=L.Linear(1024, 1024),
+            out=L.Linear(2024, n_outputs),
 
-            doc_fc1=L.Linear(1000, 600),
-            doc_fc2=L.Linear(600, 300),
-            bi1=L.Bilinear(300, 300, 300),
+            doc_fc1=L.Linear(1000, 1000),
 
             conva=L.Convolution2D(576, 128, 1, nobias=True),
             norma=L.BatchNormalization(128),
@@ -178,8 +176,7 @@ class GoogLeNetBN(chainer.FunctionSet):
         h = F.relu(self.linz(h))
 
         h2 = F.relu(self.doc_fc1(F.dropout(doc, train=train)))
-        h2 = F.relu(self.doc_fc2(h2))
-        bi = F.relu(self.bi1(h, h2))
+        bi = F.concat((h, h2), axis=0)
 
         h = self.out(bi)
 
