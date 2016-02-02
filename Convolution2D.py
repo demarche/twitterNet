@@ -280,7 +280,7 @@ if __name__ == '__main__':
                         help='working path.  (default: my dir)')
     parser.add_argument('-s', "--saved_path", dest='saved_path', default="", type=str,
                         help='saved model path.  (default: empty)')
-    parser.add_argument('-g', "--gpu", dest='gpu_id', default=0,
+    parser.add_argument('-g', "--gpu", dest='gpu_id', default=0, type=int,
                         help='using gpu id.  (default: 0)')
     parser.add_argument('-r', "--reg", dest='regression', type=bool, default=True,
                         help='using regression predict.  (default: True)')

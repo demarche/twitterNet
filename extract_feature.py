@@ -10,7 +10,7 @@ from PIL import Image
 
 class saver:
     def __init__(self, ROOT_PATH, in_size):
-        model_basename = 'model'
+        model_basename = 'Data/model'
         print('loading d2v model..')
         self.model = models.Doc2Vec.load(model_basename+'.d2v')
         print('loaded')
@@ -129,6 +129,7 @@ class saver:
 
                 for image_path in glob.glob(image_folder):
                     # save image
+
                     try:
                         img = self.preprocess(Image.open(image_path))
                     except:
@@ -140,6 +141,7 @@ class saver:
                     mean_image += img
 
                     # extract corpus feature
+
                     words = self.mymecab(cp_elem[0])
                     cp_feat = self.model.infer_vector(words)
                     corpus_features.append(cp_feat)
