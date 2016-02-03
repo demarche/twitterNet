@@ -175,8 +175,8 @@ class GoogLeNetBN(chainer.FunctionSet):
         h = F.average_pooling_2d(self.inc5b(h), 7)
         h = F.relu(self.linz(h))
 
-        h2 = F.prelu(self.doc_fc1(F.dropout(doc, train=train)))
-        bi = F.concat((h, h2), axis=0)
+        h2 = F.leaky_relu(self.doc_fc1(F.dropout(doc, train=train)))
+        bi = F.concat((h, h2), axis=1)
 
         h = self.out(bi)
 
