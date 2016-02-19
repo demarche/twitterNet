@@ -48,7 +48,7 @@ def reduce_label(labels, k, split_perm):
     p.finish()
     return split_perm
 
-def output_test(path, gpu_id, saved_path, regression):
+def output_test(path, gpu_id, saved_path, regression, useImage, useDoc):
     gpu = gpu_id >= 0
     dir = os.path.dirname(saved_path)
     if gpu:
@@ -157,6 +157,8 @@ def train_and_test(path, gpu_id, saved_path, regression, useImage, useDoc):
     print("gpu : ", gpu_id)
     print("path : ", path)
     print("save path : ", saved_path)
+    print("img : ", useImage)
+    print("doc : ", useDoc)
     print("loading data")
     if regression:
         labels = pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb"))
@@ -289,20 +291,20 @@ if __name__ == '__main__':
                         help='saved model path.  (default: empty)')
     parser.add_argument('-g', "--gpu", dest='gpu_id', default=0, type=int,
                         help='using gpu id.  (default: 0)')
-    parser.add_argument('-r', "--reg", dest='regression', type=bool, default=False,
+    parser.add_argument('-r', "--reg", dest='regression', type=int, default=0,
                         help='using regression predict.  (default: False)')
-    parser.add_argument('-img', "--image", dest='useimage', type=bool, default=True,
+    parser.add_argument('-img', "--image", dest='useimage', type=int, default=1,
                         help='using regression predict.  (default: True)')
-    parser.add_argument('-doc', "--document", dest='usedoc', type=bool, default=True,
+    parser.add_argument('-doc', "--document", dest='usedoc', type=int, default=1,
                         help='using regression predict.  (default: True)')
 
     args = parser.parse_args()
     if args.kind == 0:
         print(args.path)
         print(args.saved_path)
-        train_and_test(args.path, args.gpu_id, args.saved_path, args.regression)
+        train_and_test(args.path, args.gpu_id, args.saved_path, args.regression == 1, args.useimage == 1, args.usedoc == 1)
     elif args.kind == 1:
-        output_test(args.path, args.gpu_id, args.saved_path, args.regression)
+        output_test(args.path, args.gpu_id, args.saved_path, args.regression == 1, args.useimage == 1, args.usedoc == 1)
     else:
         build_imagesets(args.path)
 

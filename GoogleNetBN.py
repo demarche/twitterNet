@@ -135,6 +135,8 @@ class GoogLeNetBN(chainer.FunctionSet):
             inc5b=L.InceptionBN(1024, 352, 192, 320, 192, 224, 'max', 128),
             linz=L.Linear(1024, 1024),
             out=L.Linear(2024, n_outputs),
+            outimg=L.Linear(1024, n_outputs),
+            outdoc=L.Linear(1000, n_outputs),
 
             doc_fc1=L.Linear(1000, 1000),
 
@@ -193,9 +195,9 @@ class GoogLeNetBN(chainer.FunctionSet):
             bi = F.concat((h, h2), axis=1)
             h = self.out(bi)
         elif useImage:
-            h = self.out(h)
+            h = self.outimg(h)
         else:
-            h = self.out(h2)
+            h = self.outdoc(h2)
 
         if train:
             if useImage:
