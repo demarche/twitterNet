@@ -93,6 +93,7 @@ def create_split_perm(regression, labels, path):
         print(lbl_cnt)
         k = min(lbl_cnt)
         print(k)
+        print("reducing")
         split_perm = reduce_label(labels, k, split_perm)
         # check
         lbl_check=[]
@@ -147,12 +148,15 @@ def create_split_perm(regression, labels, path):
         print(len(split_perm))
     return split_perm
 
-def train_and_test(path, gpu_id, saved_path, regression):
+def train_and_test(path, gpu_id, saved_path, regression, useImage, useDoc):
     train_test_rate = 0.2
-    batchsize = 10
+    batchsize = 30
     n_epoch = 1000
     gpu = gpu_id >= 0
-
+    print("reg : ", regression)
+    print("gpu : ", gpu_id)
+    print("path : ", path)
+    print("save path : ", saved_path)
     print("loading data")
     if regression:
         labels = pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb"))
@@ -166,10 +170,12 @@ def train_and_test(path, gpu_id, saved_path, regression):
 
     # split train test data
     if saved_path == "":
-        dir = os.path.abspath(os.path.dirname(__file__))
+        dir = ""
     else:
         dir = os.path.dirname(saved_path)
+    print("dir is ", dir)
     if dir != "" and os.path.exists(os.path.join(dir, "train_perm.pkl")) and os.path.exists(os.path.join(dir, "test_perm.pkl")) and regression:
+        print("loaded:", dir)
         train_perm = pickle.load(open(os.path.join(dir, "train_perm.pkl"), "rb"))
         test_perm = pickle.load(open(os.path.join(dir, "test_perm.pkl"), "rb"))
         N = len(train_perm)
@@ -184,8 +190,6 @@ def train_and_test(path, gpu_id, saved_path, regression):
         test_perm = split_perm[N:]
         print("train:", len(train_perm))
         print("test:", len(test_perm))
-        if dir == "":
-            dir = os.path.abspath(os.path.dirname(__file__))
         pickle.dump(train_perm, open(os.path.join(dir, "train_perm.pkl"), "wb"))
         pickle.dump(test_perm, open(os.path.join(dir, "test_perm.pkl"), "wb"))
 
@@ -224,7 +228,7 @@ def train_and_test(path, gpu_id, saved_path, regression):
             x_batch_doc = doc_vectors[train_perm[perm[i:i + batchsize]]]
             y_batch = labels[train_perm[perm[i:i + batchsize]]]
             # Pass the loss function (Classifier defines it) and its arguments
-            loss, predict = worker.train(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu)
+            loss, predict = worker.train(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
             sum_loss += float(loss) * len(y_batch)
             sum_predict += float(predict) * len(y_batch)
         p.finish()
@@ -232,8 +236,8 @@ def train_and_test(path, gpu_id, saved_path, regression):
         print("train mean corr: %f" % (sum_predict / N))
         train_losses.append(sum_loss / N)
         train_scores.append(sum_predict / N)
-        pickle.dump(train_losses, open("train_losses.pkl", "wb"))
-        pickle.dump(train_scores, open("train_scores.pkl", "wb"))
+        pickle.dump(train_losses, open(os.path.join(dir, "train_losses.pkl"), "wb"))
+        pickle.dump(train_scores, open(os.path.join(dir, "train_scores.pkl"), "wb"))
         # test
         if epoch % 5 == 0 and epoch != 0:
             sum_accuracy = [0.0] * label_max
@@ -247,7 +251,7 @@ def train_and_test(path, gpu_id, saved_path, regression):
                 y_batch = labels[test_perm[i:i + batchsize]]
 
                 if regression:
-                    corr = worker.test(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu)
+                    corr = worker.test(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
                     sum_corr += corr * len(y_batch)
                 else:
                     # ラベルごとの精度を出す
@@ -255,26 +259,26 @@ def train_and_test(path, gpu_id, saved_path, regression):
                     for label in range(label_max):
                         labeled_perm = [x for x in np.arange(len(y_batch)) if y_batch[x] == label]
                         if len(labeled_perm) != 0:
-                            acc = worker.test(x_batch[labeled_perm], x_batch_doc[labeled_perm], y_batch[labeled_perm],
-                                             regression=regression, gpu=gpu)*len(labeled_perm)
+                            acc[label] = worker.test(x_batch[labeled_perm], x_batch_doc[labeled_perm], y_batch[labeled_perm],
+                                             regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)*len(labeled_perm)
                         total_acc_elem[label] += len(labeled_perm)
                     sum_accuracy = [s+float(t) for s, t in zip(sum_accuracy, acc)]
             p.finish()
             if regression:
                 print("test mean corr: %f" % (sum_corr / N_test))
                 test_move.append(sum_corr / N_test)
-                pickle.dump(test_move, open("test_score.pkl", "wb"))
+                pickle.dump(test_move, open(os.path.join(dir, "test_score.pkl"), "wb"))
             else:
                 sum_accuracy = [t / float(u) for t, u in zip(sum_accuracy, total_acc_elem)]
                 print("\n".join(map(str, sum_accuracy)))
                 print("mean:", np.mean(sum_accuracy))
                 test_move.append(np.mean(sum_accuracy))
-                pickle.dump(test_move, open("test_score.pkl", "wb"))
+                pickle.dump(test_move, open(os.path.join(dir, "test_score.pkl"), "wb"))
 
         if epoch % 5 == 0 and epoch != 0:
             # Save the model and the optimizer
             print('save the model')
-            worker.save(epoch, dir)
+            worker.save(dir, epoch)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process about tweetNet')
     parser.add_argument('-k', "--kind", dest='kind', default=0, type=int,
@@ -286,10 +290,16 @@ if __name__ == '__main__':
     parser.add_argument('-g', "--gpu", dest='gpu_id', default=0, type=int,
                         help='using gpu id.  (default: 0)')
     parser.add_argument('-r', "--reg", dest='regression', type=bool, default=False,
+                        help='using regression predict.  (default: False)')
+    parser.add_argument('-img', "--image", dest='useimage', type=bool, default=True,
+                        help='using regression predict.  (default: True)')
+    parser.add_argument('-doc', "--document", dest='usedoc', type=bool, default=True,
                         help='using regression predict.  (default: True)')
 
     args = parser.parse_args()
     if args.kind == 0:
+        print(args.path)
+        print(args.saved_path)
         train_and_test(args.path, args.gpu_id, args.saved_path, args.regression)
     elif args.kind == 1:
         output_test(args.path, args.gpu_id, args.saved_path, args.regression)

@@ -39,20 +39,20 @@ class twitterNet_worker():
                             dtype=cuda.cupy.float32).reshape(t.data._shape)
         return t
 
-    def predict(self, x_img, x_doc, regression, gpu=True):
+    def predict(self, x_img, x_doc, regression, gpu=True, useImage=True, useDoc=True):
         xp = cuda.cupy if gpu else np
         x_img = xp.asarray(x_img)
         x_doc = xp.asarray(x_doc)
         img, doc = Variable(x_img), Variable(x_doc)
-        return self.model.forward(img, doc, train=False, regression=regression)
+        return self.model.forward(img, doc, train=False, regression=regression, useImage=useImage, useDoc=useDoc)
 
-    def test(self, x_img, x_doc, y_data, regression, gpu=True):
+    def test(self, x_img, x_doc, y_data, regression, gpu=True, useImage=True, useDoc=True):
         xp = cuda.cupy if gpu else np
         x_img = xp.asarray(x_img)
         x_doc = xp.asarray(x_doc)
         y_data = xp.asarray(y_data)
         img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
-        y = self.model.forward(img, doc, train=False, regression=regression)
+        y = self.model.forward(img, doc, train=False, regression=regression, useImage=useImage, useDoc=useDoc)
         if regression:
             h = self.toLog(y, xp)
             t = self.toLog(t, xp)
@@ -60,33 +60,43 @@ class twitterNet_worker():
             t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
             return np.corrcoef(h, t)[0, 1]
         else:
-            return F.accuracy(y, t)
+            return F.accuracy(y, t).data
 
-    def train(self, x_img, x_doc, y_data, regression, gpu=True):
+    def train(self, x_img, x_doc, y_data, regression, gpu=True, useImage=True, useDoc=True):
         xp = cuda.cupy if gpu else np
         x_img = xp.asarray(x_img)
         x_doc = xp.asarray(x_doc)
         y_data = xp.asarray(y_data)
         img, doc, t = Variable(x_img), Variable(x_doc), Variable(y_data)
-        y = self.model.forward(img, doc, regression=regression)
+        y = self.model.forward(img, doc, regression=regression, useImage=useImage, useDoc=useDoc)
 
         # calc loss
-        if regression:
-            a = self.toLog(y["a"], xp)
-            b = self.toLog(y["b"], xp)
-            h = self.toLog(y["h"], xp)
-            t = self.toLog(t, xp)
-            self.loss1 = F.mean_squared_error(a, t)
-            self.loss2 = F.mean_squared_error(b, t)
-            self.loss3 = F.mean_squared_error(h, t)
+        if useImage:
+            if regression:
+                a = self.toLog(y["a"], xp)
+                b = self.toLog(y["b"], xp)
+                h = self.toLog(y["h"], xp)
+                t = self.toLog(t, xp)
+                self.loss1 = F.mean_squared_error(a, t)
+                self.loss2 = F.mean_squared_error(b, t)
+                self.loss3 = F.mean_squared_error(h, t)
+            else:
+                a = y["a"]
+                b = y["b"]
+                h = y["h"]
+                self.loss1 = F.softmax_cross_entropy(a, t)
+                self.loss2 = F.softmax_cross_entropy(b, t)
+                self.loss3 = F.softmax_cross_entropy(h, t)
+            loss = 0.3 * (self.loss1 + self.loss2) + self.loss3
         else:
-            a = y["a"]
-            b = y["b"]
-            h = y["h"]
-            self.loss1 = F.softmax_cross_entropy(a, t)
-            self.loss2 = F.softmax_cross_entropy(b, t)
-            self.loss3 = F.softmax_cross_entropy(h, t)
-        loss = 0.3 * (self.loss1 + self.loss2) + self.loss3
+            if regression:
+                h = self.toLog(y, xp)
+                t = self.toLog(t, xp)
+                self.loss1 = F.mean_squared_error(h, t)
+            else:
+                self.loss1 = F.softmax_cross_entropy(y, t)
+            loss = self.loss1
+
 
         # random select optimizer
         rnd = np.random.randint(0, len(self.myOptimizers))
@@ -101,7 +111,7 @@ class twitterNet_worker():
             t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
             return loss.data, np.corrcoef(h, t)[0, 1]
         else:
-            return loss.data,  F.accuracy(h, t)
+            return loss.data, F.accuracy(h, t).data
 
 class GoogLeNetBN(chainer.FunctionSet):
 
@@ -141,50 +151,61 @@ class GoogLeNetBN(chainer.FunctionSet):
             outb=L.Linear(1024, n_outputs)
         )
 
-    def forward(self, img, doc, train=True, regression=False):
+    def forward(self, img, doc, train=True, regression=False, useImage=True, useDoc=True):
         test = not train
 
-        h = F.max_pooling_2d(
-            F.relu(self.norm1(self.conv1(img), test=test)),  3, stride=2, pad=1)
-        h = F.max_pooling_2d(
-            F.relu(self.norm2(self.conv2(h), test=test)), 3, stride=2, pad=1)
+        if useImage:
+            h = F.max_pooling_2d(
+                F.relu(self.norm1(self.conv1(img), test=test)),  3, stride=2, pad=1)
+            h = F.max_pooling_2d(
+                F.relu(self.norm2(self.conv2(h), test=test)), 3, stride=2, pad=1)
 
-        h = self.inc3a(h)
-        h = self.inc3b(h)
-        h = self.inc3c(h)
-        h = self.inc4a(h)
+            h = self.inc3a(h)
+            h = self.inc3b(h)
+            h = self.inc3c(h)
+            h = self.inc4a(h)
+
+            if train:
+                a = F.average_pooling_2d(h, 5, stride=3)
+                a = F.relu(self.norma(self.conva(a), test=test))
+                a = F.relu(self.norma2(self.lina(a), test=test))
+                a = self.outa(a)
+
+            h = self.inc4b(h)
+            h = self.inc4c(h)
+            h = self.inc4d(h)
+
+            if train:
+                b = F.average_pooling_2d(h, 5, stride=3)
+                b = F.relu(self.normb(self.convb(b), test=test))
+                b = F.relu(self.normb2(self.linb(b), test=test))
+                b = self.outb(b)
+
+            h = self.inc4e(h)
+            h = self.inc5a(h)
+            h = F.average_pooling_2d(self.inc5b(h), 7)
+            h = F.relu(self.linz(h))
+
+        if useDoc:
+            h2 = F.leaky_relu(self.doc_fc1(F.dropout(doc, train=train)))
+
+        if useDoc and useImage:
+            bi = F.concat((h, h2), axis=1)
+            h = self.out(bi)
+        elif useImage:
+            h = self.out(h)
+        else:
+            h = self.out(h2)
 
         if train:
-            a = F.average_pooling_2d(h, 5, stride=3)
-            a = F.relu(self.norma(self.conva(a), test=test))
-            a = F.relu(self.norma2(self.lina(a), test=test))
-            a = self.outa(a)
+            if useImage:
+                return {
+                    "a": a,
+                    "b": b,
+                    "h": h
+                }
+            else:
+                return h
 
-        h = self.inc4b(h)
-        h = self.inc4c(h)
-        h = self.inc4d(h)
-
-        if train:
-            b = F.average_pooling_2d(h, 5, stride=3)
-            b = F.relu(self.normb(self.convb(b), test=test))
-            b = F.relu(self.normb2(self.linb(b), test=test))
-            b = self.outb(b)
-
-        h = self.inc4e(h)
-        h = self.inc5a(h)
-        h = F.average_pooling_2d(self.inc5b(h), 7)
-        h = F.relu(self.linz(h))
-
-        h2 = F.leaky_relu(self.doc_fc1(F.dropout(doc, train=train)))
-        bi = F.concat((h, h2), axis=1)
-
-        h = self.out(bi)
-
-        if train:
-            return {
-                "a": a,
-                "b": b,
-                "h": h
-            }
         else:
             return h
