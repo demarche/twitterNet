@@ -4,6 +4,7 @@ import chainer.links as L
 from chainer import cuda, Variable, optimizers, serializers
 import math
 import numpy as np
+import os
 import os.path
 
 class twitterNet_worker():
@@ -20,8 +21,11 @@ class twitterNet_worker():
         self.myOptimizers = [optimizers.Adam(), optimizers.AdaGrad(), optimizers.AdaDelta()]
 
     def save(self, path, epoch):
-        serializers.save_hdf5(os.path.join(path, str(epoch)+'mlp.model'), self.model)
-        serializers.save_hdf5(os.path.join(path, str(epoch)+'mlp.state'), self.optimizer)
+        joined_path = os.path.join(path, "model")
+        if not os.path.exists(joined_path):
+            os.mkdir(joined_path)
+        serializers.save_hdf5(os.path.join(joined_path, str(epoch)+'mlp.model'), self.model)
+        serializers.save_hdf5(os.path.join(joined_path, str(epoch)+'mlp.state'), self.optimizer)
 
     def load(self, path):
         name, _ = os.path.splitext(os.path.basename(path))
