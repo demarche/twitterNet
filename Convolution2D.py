@@ -89,7 +89,7 @@ def create_split_perm(regression, labels, path):
     if not regression:
         # 均衡化
         lbl_cnt = [labels.count(x) for x in range(label_max)]
-        open("before.csv", "w").write("\n".join(map(str, lbl_cnt)))
+        #open("before.csv", "w").write("\n".join(map(str, lbl_cnt)))
         print(lbl_cnt)
         k = min(lbl_cnt)
         print(k)
@@ -100,7 +100,7 @@ def create_split_perm(regression, labels, path):
         labels = np.array(labels)
         for i in range(label_max):
             lbl_check.append(list(labels[split_perm]).count(i))
-        open("after.csv", "w").write("\n".join(map(str, lbl_check)))
+        #open("after.csv", "w").write("\n".join(map(str, lbl_check)))
         print(lbl_check)
     else:
         if os.path.exists(os.path.join(path, "lbl_cnt.pkl")):
@@ -179,8 +179,8 @@ def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, us
         dir = os.path.dirname(saved_path)
     print("dir is ", dir)
     if dir != "" and os.path.exists(os.path.join(dir, "train_perm.pkl")) and os.path.exists(os.path.join(dir, "test_perm.pkl")) and regression:
-        train_perm = pickle.load(open(os.path.join(saved_path, "train_perm.pkl"), "rb"))
-        test_perm = pickle.load(open(os.path.join(saved_path, "test_perm.pkl"), "rb"))
+        train_perm = pickle.load(open(os.path.join(dir, "train_perm.pkl"), "rb"))
+        test_perm = pickle.load(open(os.path.join(dir, "test_perm.pkl"), "rb"))
         print("loaded")
         N = len(train_perm)
         N_test = len(test_perm)

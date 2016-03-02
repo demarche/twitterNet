@@ -98,6 +98,7 @@ class twitterNet_worker():
                 t = self.toLog(t, xp)
                 self.loss1 = F.mean_squared_error(h, t)
             else:
+                h = y
                 self.loss1 = F.softmax_cross_entropy(y, t)
             loss = self.loss1
 
