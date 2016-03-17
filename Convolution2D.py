@@ -62,11 +62,15 @@ def output_test(path, gpu_id, saved_path, regression, useImage, useDoc):
         cuda.get_device(gpu_id).use()
         worker.model.to_gpu()
 
-    labels = np.array(pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb")), dtype=np.int32)
+    if regression:
+        labels = np.array(pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb")), dtype=np.int32)
+    else:
+        labels = np.array(pickle.load(open(os.path.join(path, "answers.pkl"), "rb")), dtype=np.int32)
     doc_vectors = np.array(pickle.load((open(os.path.join(path, "corpus_features.pkl"), "rb"))), dtype=np.float32)
 
     perm = pickle.load(open(os.path.join(dir, 'test_perm.pkl'), "rb"))
     batchsize = 30
+    catans = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
 
     p = ProgressBar(max_value=len(perm), min_value=1)
     for i in six.moves.range(0, len(perm), batchsize):
@@ -76,8 +80,18 @@ def output_test(path, gpu_id, saved_path, regression, useImage, useDoc):
         y_batch = labels[perm[i:i + batchsize]]
         res = worker.predict(x_batch, x_batch_doc, regression, gpu=gpu)
         res = cuda.to_cpu(res.data)
-        res = [[worker.fixedLog(x[0]+worker.const), worker.fixedLog(y+worker.const)] for x, y in zip(list(res), y_batch)]
-        with open('some.csv', 'a') as f:
+        if regression:
+            res = [[worker.fixedLog(x[0]+worker.const), worker.fixedLog(y+worker.const)] for x, y in zip(list(res), y_batch)]
+            with open('some.csv', 'a') as f:
+                writer = csv.writer(f, lineterminator='\n')
+                writer.writerows(res)
+        else:
+            for pred, ans in zip(list(res), y_batch):
+                catdic[ans][pred] += 1
+
+    pickle.dump(catdic, open(os.path.join(catdic, "catdic.pkl"), "wb"))
+    if not regression:
+        with open('answer.csv', 'a') as f:
             writer = csv.writer(f, lineterminator='\n')
             writer.writerows(res)
     p.finish()
@@ -313,4 +327,3 @@ if __name__ == '__main__':
         output_test(args.path, args.gpu_id, args.saved_path, args.regression == 1, args.useimage == 1, args.usedoc == 1)
     else:
         build_imagesets(args.path)
-
