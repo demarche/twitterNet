@@ -96,6 +96,7 @@ class saver:
         corpus_features = []
         answers = []
         answers_RT = []
+        rtmean = []
         mean_image = np.zeros((3, self.in_size, self.in_size))
 
         p = ProgressBar(max_value = len(self.lines), min_value = 0)
@@ -107,7 +108,10 @@ class saver:
             info = line.split(",")
             user_id = info[0].replace("\ufeff", "")
             RT_dev = float(info[9])
+            RT_mean = float(info[8])
 
+            rtmean.append(RT_mean)
+            continue
             # read corpus
             corpus_path = self.ROOT+'/corpus/'+user_id+'.txt'
             cp_lines = open(corpus_path, 'r', encoding="utf-8", errors="ignore").readlines()
@@ -128,12 +132,13 @@ class saver:
                 image_folder = self.ROOT+'/images/'+user_id+'/'+cp_elem[1]+'/*'
 
                 for image_path in glob.glob(image_folder):
-                    # save image
 
+                    # save image
                     try:
                         img = self.preprocess(Image.open(image_path))
                     except:
                         continue
+
                     pickle.dump(img, open(saving_folder_name+"/"+str(saving_image_name)+".pkl", "wb"))
                     saving_image_name += 1
 
@@ -143,19 +148,27 @@ class saver:
                     # extract corpus feature
 
                     words = self.mymecab(cp_elem[0])
+                    wordslen.append(len(words))
+
                     cp_feat = self.model.infer_vector(words)
                     corpus_features.append(cp_feat)
 
                     # save ans
                     answers.append(ans)
-                    answers_RT.append(RT)
-        mean_image /= len(answers)
-        p.finish()
 
+                    answers_RT.append(RT-RT_mean)
+
+        #mean_image /= len(answers)
+        p.finish()
+        """
         print("save answrs")
-        pickle.dump(answers, open("answers.pkl", "wb"))
-        pickle.dump(answers_RT, open("answers_RT.pkl", "wb"))
+        #pickle.dump(answers, open("answers.pkl", "wb"))
+        pickle.dump(answers_RT, open("answers_RT2.pkl", "wb"))
+
         print("save image_mean")
         pickle.dump(mean_image, open("image_mean.pkl", "wb"))
         print("save corpus features")
         pickle.dump(corpus_features, open("corpus_features.pkl", "wb"))
+        """
+        print("wordslen")
+        pickle.dump(rtmean, open("rtmean.pkl", "wb"))

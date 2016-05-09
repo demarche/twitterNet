@@ -7,11 +7,13 @@ import numpy as np
 import os
 import os.path
 
+import csv
+
 class twitterNet_worker():
 
     const = 10.0
 
-    def __init__(self, outputdim, optimizer=None):
+    def __init__(self, outputdim, minval, optimizer=None):
         if optimizer is None:
             self.optimizer = chainer.optimizers.Adam()
         else:
@@ -19,6 +21,8 @@ class twitterNet_worker():
         self.model = GoogLeNetBN(outputdim)
         self.optimizer.setup(self.model)
         self.myOptimizers = [optimizers.Adam(), optimizers.AdaGrad(), optimizers.AdaDelta()]
+        self.mindata = -minval[0]
+        print(self.mindata)
 
     def save(self, path, epoch):
         joined_path = os.path.join(path, "model")
@@ -30,17 +34,20 @@ class twitterNet_worker():
     def load(self, path):
         name, _ = os.path.splitext(os.path.basename(path))
         serializers.load_hdf5(path, self.model)
-        return int(name[:-3])
+        return int(name[:-3])+1
 
     def fixedLog(self, a):
-        if a <= 0:
-            a = self.const
-        res = math.log(a, self.const)
+        if a + self.mindata <= 0:
+            a = 0.001-self.mindata
+        res = math.log(a + self.mindata, self.const)
         return res
 
     def toLog(self, t, xp):
-        t.data = xp.asarray(list(map(lambda t: self.fixedLog(t[0]+self.const), t.data)),
+        """
+        t.data = xp.asarray(list(map(lambda t: self.fixedLog(t[0]), t.data)),
                             dtype=cuda.cupy.float32).reshape(t.data._shape)
+        """
+        t.data = xp.asarray(list(t.data), dtype=cuda.cupy.float32).reshape(t.data._shape)
         return t
 
     def predict(self, x_img, x_doc, regression, gpu=True, useImage=True, useDoc=True):
@@ -62,7 +69,8 @@ class twitterNet_worker():
             t = self.toLog(t, xp)
             h = np.array(cuda.to_cpu(h.data)).reshape((len(h)))
             t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
-            return np.corrcoef(h, t)[0, 1]
+
+            return 0, h, t
         else:
             return F.accuracy(y, t).data
 
@@ -114,9 +122,9 @@ class twitterNet_worker():
         if regression:
             h = np.array(cuda.to_cpu(h.data)).reshape((len(h)))
             t = np.array(cuda.to_cpu(t.data)).reshape((len(t)))
-            return loss.data, np.corrcoef(h, t)[0, 1]
+            return loss.data, h, t
         else:
-            return loss.data, F.accuracy(h, t).data
+            return loss.data, F.accuracy(h, t).data, []
 
 class GoogLeNetBN(chainer.FunctionSet):
 
@@ -138,12 +146,13 @@ class GoogLeNetBN(chainer.FunctionSet):
             inc4e=L.InceptionBN(576, 0, 128, 192, 192, 256, 'max', stride=2),
             inc5a=L.InceptionBN(1024, 352, 192, 320, 160, 224, 'avg', 128),
             inc5b=L.InceptionBN(1024, 352, 192, 320, 192, 224, 'max', 128),
-            linz=L.Linear(1024, 1024),
-            out=L.Linear(2024, n_outputs),
+            linz=L.Linear(1024, 300),
+            out=L.Linear(300, n_outputs),
             outimg=L.Linear(1024, n_outputs),
             outdoc=L.Linear(1000, n_outputs),
 
-            doc_fc1=L.Linear(1000, 1000),
+            doc_fc1=L.Linear(1000, 600),
+            doc_fc2=L.Linear(600, 300),
 
             conva=L.Convolution2D(576, 128, 1, nobias=True),
             norma=L.BatchNormalization(128),
@@ -155,7 +164,8 @@ class GoogLeNetBN(chainer.FunctionSet):
             normb=L.BatchNormalization(128),
             linb=L.Linear(3200, 1024, nobias=True),
             normb2=L.BatchNormalization(1024),
-            outb=L.Linear(1024, n_outputs)
+            outb=L.Linear(1024, n_outputs),
+            bi1=L.Bilinear(300, 300, 300)
         )
 
     def forward(self, img, doc, train=True, regression=False, useImage=True, useDoc=True):
@@ -194,10 +204,11 @@ class GoogLeNetBN(chainer.FunctionSet):
             h = F.relu(self.linz(h))
 
         if useDoc:
-            h2 = F.leaky_relu(self.doc_fc1(F.dropout(doc, train=train)))
+            h2 = F.relu(self.doc_fc1(F.dropout(doc, train=train)))
+            h2 = F.relu(self.doc_fc2(h2))
 
         if useDoc and useImage:
-            bi = F.concat((h, h2), axis=1)
+            bi = F.relu(self.bi1(h, h2))#F.concat((h, h2), axis=1)
             h = self.out(bi)
         elif useImage:
             h = self.outimg(h)

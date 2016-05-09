@@ -37,10 +37,13 @@ def reduce_label(labels, k, split_perm):
 
     isUse = [False]*db_len
     counter = [0]*lbmax
+    print("reducing label...")
     p = ProgressBar(max_value=len(labels), min_value=1)
     for i, label in enumerate(labels):
         p.update(i+1)
-        if counter[label] >= k:
+        if abs(int(label)) > 600:# 絶対値600以上は消去
+            continue
+        if counter[int(label)] >= k:# k個以上のデータ数は省く
             continue
         isUse[i] = True
         counter[label] += 1
@@ -50,54 +53,82 @@ def reduce_label(labels, k, split_perm):
 
 def output_test(path, gpu_id, saved_path, regression, useImage, useDoc):
     gpu = gpu_id >= 0
+    print("reg : ", regression)
+    print("gpu : ", gpu_id)
+    print("save path : ", saved_path)
+    print("img : ", useImage)
+    print("doc : ", useDoc)
     dir = os.path.dirname(saved_path)
     if gpu:
         cuda.check_cuda_available()
+
+    print("loading labels..")
+    if regression:
+        labels = np.array(pickle.load(open(os.path.join(path, 'answers_RT2.pkl'), "rb")), dtype=np.float32)
+    else:
+        labels = np.array(pickle.load(open(os.path.join(path, "answers.pkl"), "rb")), dtype=np.int32)
+
+    print("loading doc2vec model..")
+    doc_vectors = np.array(pickle.load((open(os.path.join(path, "corpus_features.pkl"), "rb"))), dtype=np.float32)
+
     print("make NN model..")
-    worker = twitterNet_worker(1)
+    if regression:
+        dim = 1
+    else:
+        dim = 4
+    worker = twitterNet_worker(dim, [min(labels)])
+
+    # for fname in glob.glob('/media/yamashita004/4dad8012-5855-4d11-8128-8fc5247ba677/NeuralNet/GoogleNetBN_REG/model/*.model' ):
 
     print("loading NN model..")
     worker.load(saved_path)
+    #print(fname)
+    #worker.load(fname)
     if gpu:
         cuda.get_device(gpu_id).use()
         worker.model.to_gpu()
 
-    if regression:
-        labels = np.array(pickle.load(open(os.path.join(path, 'answers_RT.pkl'), "rb")), dtype=np.int32)
-    else:
-        labels = np.array(pickle.load(open(os.path.join(path, "answers.pkl"), "rb")), dtype=np.int32)
-    doc_vectors = np.array(pickle.load((open(os.path.join(path, "corpus_features.pkl"), "rb"))), dtype=np.float32)
-
     perm = pickle.load(open(os.path.join(dir, 'test_perm.pkl'), "rb"))
     batchsize = 30
     catans = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+    coef=[]
 
     p = ProgressBar(max_value=len(perm), min_value=1)
+    pred=[]
+    ans=[]
     for i in six.moves.range(0, len(perm), batchsize):
         p.update(i+1)
-        x_batch = get_images(perm[i:i + batchsize])
+        x_batch = get_images(perm[i:i + batchsize], path)
         x_batch_doc = doc_vectors[perm[i:i + batchsize]]
         y_batch = labels[perm[i:i + batchsize]]
-        res = worker.predict(x_batch, x_batch_doc, regression, gpu=gpu)
-        res = cuda.to_cpu(res.data)
         if regression:
-            res = [[worker.fixedLog(x[0]+worker.const), worker.fixedLog(y+worker.const)] for x, y in zip(list(res), y_batch)]
-            with open('some.csv', 'a') as f:
-                writer = csv.writer(f, lineterminator='\n')
-                writer.writerows(res)
+            acoef,h,t=worker.test(x_batch, x_batch_doc, y_batch, regression, gpu=gpu)
+            pred.extend(h)
+            ans.extend(t)
+            coef.append(acoef)
         else:
-            for pred, ans in zip(list(res), y_batch):
-                catdic[ans][pred] += 1
+            for pred, ans in zip([h,t], y_batch):
+                mymax = 0
+                myid=0
+                for i,x in enumerate(pred):
+                    if mymax < x:
+                        mymax = x
+                        myid = i
+                catans[ans][myid] += 1
 
-    pickle.dump(catdic, open(os.path.join(catdic, "catdic.pkl"), "wb"))
-    if not regression:
-        with open('answer.csv', 'a') as f:
-            writer = csv.writer(f, lineterminator='\n')
-            writer.writerows(res)
+    pickle.dump(catans, open(os.path.join(path, "catdic.pkl"), "wb"))
     p.finish()
+    if regression:
+        corr = np.corrcoef(pred, ans)[0, 1]
+        print(corr)
+        print(np.mean(coef))
+        with open('some.csv', 'w') as f:
+            writer = csv.writer(f, lineterminator='\n')
+            for h, t in zip(pred, ans):
+                writer.writerow([h, t])
 
 def create_split_perm(regression, labels, path):
-    label_max = max(labels) + 1
+    label_max = int(max(labels) + 1)
     db_len = len(labels)
     split_perm = np.random.permutation(db_len)
     if not regression:
@@ -141,6 +172,7 @@ def create_split_perm(regression, labels, path):
         lbl_cnt = [labels2.count(x) for x in range(label_max)]
         print(lbl_cnt)
         # remove sparse element
+        """
         remove_list = []
         for i, x in list(enumerate(lbl_cnt))[::-1]:
             if x != 1 and x != 0:
@@ -153,6 +185,7 @@ def create_split_perm(regression, labels, path):
         for x in remove_list:
             index = labels.index(x)
             split_perm.remove(index)
+        """
         split_perm = np.array(split_perm)
 
         labels2 = [labels[x] for x in split_perm]
@@ -164,7 +197,7 @@ def create_split_perm(regression, labels, path):
 
 def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, useDoc, iter):
     train_test_rate = 0.2
-    batchsize = 30
+    batchsize = 25
     n_epoch = iter
     gpu = gpu_id >= 0
     print("reg : ", regression)
@@ -218,42 +251,54 @@ def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, us
 
     # make model
     print("make model")
+    train_losses = []
+    train_scores = []
+    test_move = []
     if regression:
-        worker = twitterNet_worker(1)
+        worker = twitterNet_worker(1, min(labels))
     else:
-        worker = twitterNet_worker(label_max)
+        worker = twitterNet_worker(label_max, min(labels))
     if saved_path != "" and os.path.exists(saved_path):
         loaded_epoch = worker.load(saved_path)
+        train_losses = pickle.load(open(os.path.join(load_path, "train_losses.pkl"), "rb"))[:loaded_epoch-1]
+        train_scores = pickle.load(open(os.path.join(load_path, "train_scores.pkl"), "rb"))[:loaded_epoch-1]
+        test_move = pickle.load(open(os.path.join(load_path, "test_score.pkl"), "rb"))[:int((loaded_epoch-1)/5)]
+        print(len(train_losses))
+        print(len(train_scores))
+        print(len(test_move))
     else:
         loaded_epoch = 1
     if gpu:
         cuda.get_device(0).use()
         worker.model.to_gpu()
-    train_losses = []
-    train_scores = []
-    test_move = []
 
     for epoch in six.moves.range(loaded_epoch, n_epoch + 1):
         print('epoch', epoch)
         # training
         perm = np.random.permutation(N)
         sum_loss = 0
-        sum_predict = 0
         p = ProgressBar(max_value=N, min_value=1)
+        myh = [] #トレーニング用
+        myt = []
         for i in six.moves.range(0, N, batchsize):
             p.update(i+1)
             x_batch = get_images(train_perm[perm[i:i + batchsize]], path)
             x_batch_doc = doc_vectors[train_perm[perm[i:i + batchsize]]]
             y_batch = labels[train_perm[perm[i:i + batchsize]]]
             # Pass the loss function (Classifier defines it) and its arguments
-            loss, predict = worker.train(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
+            loss, h, t = worker.train(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
             sum_loss += float(loss) * len(y_batch)
-            sum_predict += float(predict) * len(y_batch)
+            myh.extend(list(h))
+            myt.extend(list(t))
         p.finish()
+        if regression:
+            pred = np.corrcoef(np.array(myh), np.array(myt))[0, 1]
+        else:
+            pred = np.mean(np.array(myh))
         print("train mean loss: %f" % (sum_loss / N))
-        print("train mean corr: %f" % (sum_predict / N))
+        print("train mean corr: %f" % (pred))
         train_losses.append(sum_loss / N)
-        train_scores.append(sum_predict / N)
+        train_scores.append(pred)
         pickle.dump(train_losses, open(os.path.join(load_path, "train_losses.pkl"), "wb"))
         pickle.dump(train_scores, open(os.path.join(load_path, "train_scores.pkl"), "wb"))
         # test
@@ -261,6 +306,8 @@ def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, us
             sum_accuracy = [0.0] * label_max
             total_acc_elem = [0] * label_max
             sum_corr = 0
+            myh = [] #テスト用
+            myt = []
             p = ProgressBar(max_value=N_test, min_value=1)
             for i in range(0, N_test, batchsize):
                 p.update(i+1)
@@ -269,8 +316,9 @@ def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, us
                 y_batch = labels[test_perm[i:i + batchsize]]
 
                 if regression:
-                    corr = worker.test(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
-                    sum_corr += corr * len(y_batch)
+                    h, t = worker.test(x_batch, x_batch_doc, y_batch, regression=regression, gpu=gpu, useImage=useImage, useDoc=useDoc)
+                    myh.extend(list(h))
+                    myt.extend(list(t))
                 else:
                     # ラベルごとの精度を出す
                     acc = [0.0] * label_max
@@ -283,8 +331,9 @@ def train_and_test(path, gpu_id, load_path, saved_path, regression, useImage, us
                     sum_accuracy = [s+float(t) for s, t in zip(sum_accuracy, acc)]
             p.finish()
             if regression:
-                print("test mean corr: %f" % (sum_corr / N_test))
-                test_move.append(sum_corr / N_test)
+                corr = np.corrcoef(np.array(myh), np.array(myt))[0, 1]
+                print("test mean corr: %f" % (corr))
+                test_move.append(corr)
                 pickle.dump(test_move, open(os.path.join(load_path, "test_score.pkl"), "wb"))
             else:
                 sum_accuracy = [t / float(u) for t, u in zip(sum_accuracy, total_acc_elem)]
